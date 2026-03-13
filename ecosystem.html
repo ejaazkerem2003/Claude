@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Living Ecosystem v2</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#07071a; overflow:hidden; font-family:'Courier New',monospace; }
+canvas { display:block; }
+
+/* ── shared panel styles ── */
+.panel {
+  position:fixed; color:#ccc;
+  background:rgba(4,4,18,0.88);
+  border:1px solid rgba(255,255,255,0.07);
+  border-radius:10px; backdrop-filter:blur(6px);
+  user-select:none; font-size:11px;
+}
+.panel h2 {
+  font-size:10px; letter-spacing:3px; color:#556;
+  text-transform:uppercase; padding-bottom:7px;
+  border-bottom:1px solid rgba(255,255,255,0.05);
+  margin-bottom:8px;
+}
+
+/* ── left panel (populations) ── */
+#pop { top:12px; left:12px; padding:12px 15px; min-width:195px; }
+.pr { display:flex; justify-content:space-between; align-items:center; gap:12px; margin:4px 0; }
+.pl { display:flex; align-items:center; gap:6px; }
+.sw { width:9px; height:9px; border-radius:50%; box-shadow:0 0 5px currentColor; flex-shrink:0; }
+.pv { font-weight:bold; min-width:26px; text-align:right; }
+.div { border:none; border-top:1px solid rgba(255,255,255,0.05); margin:7px 0; }
+.mi { font-size:10px; color:#445; margin:2px 0; }
+.mi span { color:#667; }
+
+/* ── right panel (trait stats) ── */
+#stats { top:12px; right:12px; padding:12px 14px; width:310px; }
+#stats table { width:100%; border-collapse:collapse; font-size:10px; }
+#stats th, #stats td { padding:2px 4px; text-align:right; }
+#stats td:first-child { text-align:left; color:#556; }
+#stats th:first-child { text-align:left; }
+#stats tr:hover td { background:rgba(255,255,255,0.03); }
+#oldest { margin-top:8px; font-size:10px; color:#556; line-height:1.6; }
+#oldest span { color:#889; }
+
+/* ── zone legend (bottom) ── */
+#zlegend {
+  position:fixed; bottom:12px; left:12px;
+  font-size:10px; color:#334;
+  background:rgba(4,4,18,0.75);
+  padding:7px 11px; border-radius:8px;
+  border:1px solid rgba(255,255,255,0.04);
+  line-height:1.8;
+}
+
+/* ── alert ── */
+#alert {
+  position:fixed; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  color:#ff6644; font-size:14px; letter-spacing:3px;
+  pointer-events:none; opacity:0; transition:opacity 0.4s;
+  text-shadow:0 0 22px #ff4400; text-transform:uppercase;
+}
+
+/* ── death cause tooltip ── */
+#cause {
+  position:fixed; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  pointer-events:none; opacity:0;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ── Population panel ── -->
+<div class="panel" id="pop">
+  <h2>Ecosystem v2</h2>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#4dff80;color:#4dff80"></div>Gliders</div><div class="pv" id="p-gli" style="color:#4dff80">0</div></div>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#ff4d4d;color:#ff4d4d;clip-path:polygon(50% 0%,100% 100%,0% 100%)"></div>Hunters</div><div class="pv" id="p-hun" style="color:#ff4d4d">0</div></div>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#4da6ff;color:#4da6ff;border-radius:40% 60% 55% 45%/50% 40% 60% 50%"></div>Growers</div><div class="pv" id="p-grw" style="color:#4da6ff">0</div></div>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#88ff44;color:#88ff44;border-radius:2px;clip-path:polygon(50% 0%,100% 50%,50% 100%,0% 50%)"></div>Plants</div><div class="pv" id="p-plt" style="color:#88ff44">0</div></div>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#ff44bb;color:#ff44bb"></div>Parasites</div><div class="pv" id="p-par" style="color:#ff44bb">0</div></div>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#ffdd44;color:#ffdd44"></div>Orbs</div><div class="pv" id="p-orb" style="color:#ffdd44">0</div></div>
+  <div class="pr"><div class="pl"><div class="sw" style="background:#cc55ff;color:#cc55ff"></div>Rare</div><div class="pv" id="p-rar" style="color:#cc55ff">0</div></div>
+  <hr class="div">
+  <div class="mi">Generation <span id="m-gen">0</span></div>
+  <div class="mi">Elapsed <span id="m-time">0s</span></div>
+  <div class="mi">Births <span id="m-births">0</span></div>
+  <div class="mi">Deaths <span id="m-deaths">0</span></div>
+</div>
+
+<!-- ── Trait stats panel ── -->
+<div class="panel" id="stats">
+  <h2>Average Traits</h2>
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th style="color:#4dff80">GLI</th>
+        <th style="color:#ff4d4d">HUN</th>
+        <th style="color:#4da6ff">GRW</th>
+        <th style="color:#ff44bb">PAR</th>
+        <th style="color:#88ff44">PLT</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Speed</td>   <td id="t-gli-spd">—</td><td id="t-hun-spd">—</td><td id="t-grw-spd">—</td><td id="t-par-spd">—</td><td id="t-plt-spd">—</td></tr>
+      <tr><td>Size</td>    <td id="t-gli-siz">—</td><td id="t-hun-siz">—</td><td id="t-grw-siz">—</td><td id="t-par-siz">—</td><td id="t-plt-siz">—</td></tr>
+      <tr><td>Vision</td>  <td id="t-gli-vis">—</td><td id="t-hun-vis">—</td><td id="t-grw-vis">—</td><td id="t-par-vis">—</td><td id="t-plt-vis">—</td></tr>
+      <tr><td>Repr.Rate</td><td id="t-gli-rpr">—</td><td id="t-hun-rpr">—</td><td id="t-grw-rpr">—</td><td id="t-par-rpr">—</td><td id="t-plt-rpr">—</td></tr>
+      <tr><td>Avg Age</td> <td id="t-gli-age">—</td><td id="t-hun-age">—</td><td id="t-grw-age">—</td><td id="t-par-age">—</td><td id="t-plt-age">—</td></tr>
+    </tbody>
+  </table>
+  <div id="oldest">Oldest: <span id="oldest-val">—</span></div>
+</div>
+
+<div id="zlegend">
+  <span style="color:#44ff88">■</span> Food Zone: energy regen, plants flourish &nbsp;
+  <span style="color:#ff4444">■</span> Danger Zone: energy drain, hunters speed up &nbsp;
+  <span style="color:#4488ff">■</span> Safe Zone: no predators, slow healing
+</div>
+
+<div id="alert"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  SETUP
+// ═══════════════════════════════════════════════════════
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W = canvas.width  = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+window.addEventListener('resize', () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; });
+
+let UID = 0, frame = 0, generation = 0, births = 0, deaths = 0;
+const T0 = Date.now();
+
+// ═══════════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════════
+const CFG = {
+  glider  : { init:26, max:65,  baseRepro:80,  maxAge:3200, baseEnergy:50  },
+  hunter  : { init:9,  max:25,  baseRepro:110, maxAge:4000, baseEnergy:65  },
+  grower  : { init:6,  max:16,  baseRepro:145, maxAge:5000, baseEnergy:80  },
+  plant   : { init:18, max:35,  baseRepro:70,  maxAge:4500, baseEnergy:10  },
+  parasite: { init:8,  max:22,  baseRepro:60,  maxAge:2200, baseEnergy:30  },
+  orb     : { max:50,  rate:0.038 },
+  rare    : { max:4,   chance:0.00022 },
+};
+
+// ═══════════════════════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════════════════════
+const rand    = (a,b) => a + Math.random()*(b-a);
+const randInt = (a,b) => Math.floor(rand(a,b));
+const clamp   = (v,mn,mx) => Math.max(mn,Math.min(mx,v));
+const dist2   = (ax,ay,bx,by) => (ax-bx)**2+(ay-by)**2;
+const fmt1    = v => (typeof v==='number' ? v.toFixed(1) : '—');
+
+function mutate(v, pct=0.13) { return v*(1+(Math.random()*2-1)*pct); }
+
+function mutateTraits(t, pct=0.13) {
+  return {
+    speed            : clamp(mutate(t.speed,            pct), 0.3, 8.0),
+    size             : clamp(mutate(t.size,             pct), 2.0, 42.0),
+    vision           : clamp(mutate(t.vision,           pct), 45,  420),
+    reproductionRate : clamp(mutate(t.reproductionRate, pct), 0.45, 2.6),
+  };
+}
+
+function avgTrait(arr, key) {
+  if (!arr.length) return null;
+  return arr.reduce((s,o)=>s+o[key],0)/arr.length;
+}
+
+// ═══════════════════════════════════════════════════════
+//  ZONES
+// ═══════════════════════════════════════════════════════
+let zones = [];
+
+function buildZones() {
+  zones = [
+    { type:'food',   x:W*0.18, y:H*0.25, r:110, color:'rgba(68,255,136,0.06)', border:'rgba(68,255,136,0.22)' },
+    { type:'food',   x:W*0.80, y:H*0.70, r:100, color:'rgba(68,255,136,0.06)', border:'rgba(68,255,136,0.22)' },
+    { type:'danger', x:W*0.65, y:H*0.22, r:95,  color:'rgba(255,60,60,0.06)',  border:'rgba(255,60,60,0.22)'  },
+    { type:'danger', x:W*0.30, y:H*0.75, r:90,  color:'rgba(255,60,60,0.06)',  border:'rgba(255,60,60,0.22)'  },
+    { type:'safe',   x:W*0.50, y:H*0.50, r:105, color:'rgba(68,136,255,0.06)', border:'rgba(68,136,255,0.22)' },
+  ];
+}
+
+function zoneAt(x, y) {
+  for (const z of zones)
+    if (dist2(x,y,z.x,z.y) < z.r*z.r) return z;
+  return null;
+}
+
+function inSafeZone(x,y) { const z=zoneAt(x,y); return z && z.type==='safe'; }
+
+function drawZones() {
+  for (const z of zones) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(z.x, z.y, z.r, 0, Math.PI*2);
+    ctx.fillStyle   = z.color;
+    ctx.strokeStyle = z.border;
+    ctx.lineWidth   = 1.2;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  BASE ORGANISM
+// ═══════════════════════════════════════════════════════
+class Organism {
+  constructor(type, x, y, traits, energy) {
+    this.id    = UID++;
+    this.type  = type;
+    this.x     = x ?? rand(24, W-24);
+    this.y     = y ?? rand(24, H-24);
+    // traits
+    this.speed            = traits.speed;
+    this.size             = traits.size;
+    this.vision           = traits.vision;
+    this.reproductionRate = traits.reproductionRate;
+    // state
+    this.energy   = energy ?? 50;
+    this.age      = 0;
+    this.maxAge   = CFG[type]?.maxAge ?? 3000;
+    this.alive    = true;
+    this.deathBy  = null;
+    // physics
+    this.vx = rand(-1,1)*this.speed;
+    this.vy = rand(-1,1)*this.speed;
+    this.trail    = [];
+    this.trailMax = 10;
+  }
+
+  step() {
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x <  this.size)     { this.x =  this.size;     this.vx *= -0.9; }
+    if (this.x >  W-this.size)   { this.x =  W-this.size;   this.vx *= -0.9; }
+    if (this.y <  this.size)     { this.y =  this.size;     this.vy *= -0.9; }
+    if (this.y >  H-this.size)   { this.y =  H-this.size;   this.vy *= -0.9; }
+
+    this.trail.push({x:this.x, y:this.y});
+    if (this.trail.length > this.trailMax) this.trail.shift();
+
+    this.age++;
+
+    // Zone effects
+    const z = zoneAt(this.x, this.y);
+    let drain = 0.055 + this.size*0.0018;
+    if (z) {
+      if (z.type==='food')   drain *= 0.45;
+      if (z.type==='danger') drain *= 1.8;
+      if (z.type==='safe')   drain *= 0.55;
+    }
+    this.energy -= drain;
+
+    if (this.energy <= 0)      { this.alive=false; this.deathBy='starvation'; deaths++; }
+    if (this.age >= this.maxAge){ this.alive=false; this.deathBy='old age';   deaths++; }
+  }
+
+  seek(tx, ty, f=0.1) {
+    const dx=tx-this.x, dy=ty-this.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+    this.vx += dx/d*f; this.vy += dy/d*f;
+  }
+  flee(tx, ty, f=0.18) { this.seek(this.x*2-tx, this.y*2-ty, f); }
+  wander(s=0.25) {
+    if (Math.random()<0.025) {
+      const a=Math.random()*Math.PI*2;
+      this.vx+=Math.cos(a)*s; this.vy+=Math.sin(a)*s;
+    }
+  }
+  limitSpeed(max) {
+    const spd=Math.sqrt(this.vx*this.vx+this.vy*this.vy);
+    if (spd>max) { this.vx=this.vx/spd*max; this.vy=this.vy/spd*max; }
+    if (spd<0.25) {
+      const a=Math.random()*Math.PI*2;
+      this.vx+=Math.cos(a)*0.4; this.vy+=Math.sin(a)*0.4;
+    }
+  }
+
+  drawTrail(color, alpha=0.16) {
+    if (this.trail.length<3) return;
+    ctx.save();
+    ctx.globalAlpha=alpha; ctx.strokeStyle=color;
+    ctx.lineWidth=this.size*0.55; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath();
+    ctx.moveTo(this.trail[0].x, this.trail[0].y);
+    for (let i=1;i<this.trail.length;i++) ctx.lineTo(this.trail[i].x, this.trail[i].y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawBar(maxE, color) {
+    const bw=this.size*2.4, bh=2.5;
+    const bx=this.x-bw/2, by=this.y-this.size-7;
+    const pct=clamp(this.energy/maxE,0,1);
+    ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(bx,by,bw,bh);
+    ctx.fillStyle=pct>0.65?color:pct>0.35?'#ffee44':'#ff3333';
+    ctx.fillRect(bx,by,bw*pct,bh);
+
+    // age bar (grey, below energy bar)
+    const agePct=clamp(this.age/this.maxAge,0,1);
+    ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillRect(bx,by+3.5,bw,1.5);
+    ctx.fillStyle=`rgba(180,180,180,${0.3+agePct*0.5})`;
+    ctx.fillRect(bx,by+3.5,bw*agePct,1.5);
+  }
+
+  reproThreshold() { return CFG[this.type].baseRepro * this.reproductionRate; }
+}
+
+// ═══════════════════════════════════════════════════════
+//  ENERGY ORB
+// ═══════════════════════════════════════════════════════
+class EnergyOrb {
+  constructor(x,y) {
+    this.type='orb'; this.alive=true;
+    this.x=x??rand(8,W-8); this.y=y??rand(8,H-8);
+    this.size=rand(2.5,5.5); this.energy=rand(12,28);
+    this.phase=rand(0,Math.PI*2); this.phaseSpd=rand(0.04,0.09);
+    this.vx=rand(-0.25,0.25); this.vy=rand(-0.25,0.25);
+  }
+  update() {
+    this.x=clamp(this.x+this.vx,4,W-4);
+    this.y=clamp(this.y+this.vy,4,H-4);
+    this.phase+=this.phaseSpd;
+  }
+  draw() {
+    const r=this.size*(1+0.28*Math.sin(this.phase));
+    ctx.save();
+    ctx.shadowBlur=12; ctx.shadowColor='#ffcc00';
+    const g=ctx.createRadialGradient(this.x,this.y,0,this.x,this.y,r);
+    g.addColorStop(0,'#ffffff'); g.addColorStop(0.35,'#ffff99'); g.addColorStop(1,'#ffaa00');
+    ctx.beginPath(); ctx.arc(this.x,this.y,r,0,Math.PI*2);
+    ctx.fillStyle=g; ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  PLANT
+// ═══════════════════════════════════════════════════════
+class Plant extends Organism {
+  constructor(x,y,traits,energy) {
+    const t = traits ?? {
+      speed:0, size:rand(4,9), vision:0, reproductionRate:rand(0.8,1.3)
+    };
+    super('plant', x, y, t, energy??CFG.plant.baseEnergy);
+    this.leafAngle = rand(0,Math.PI*2);
+    this.leafWave  = rand(0,Math.PI*2);
+    this.vx=0; this.vy=0;
+    this.trailMax=0;
+  }
+
+  update(all) {
+    this.age++;
+
+    // Passive energy production (more in food zones)
+    const z = zoneAt(this.x,this.y);
+    let regen = 0.045 * this.size * 0.08;
+    if (z?.type==='food') regen *= 2.2;
+    this.energy += regen;
+
+    // Age death
+    if (this.age >= this.maxAge) { this.alive=false; this.deathBy='old age'; deaths++; return null; }
+    // Max energy cap
+    if (this.energy > 120) this.energy = 120;
+
+    // Grow with energy
+    if (this.energy > 30) this.size = Math.min(this.size + 0.004, 14);
+
+    this.leafWave += 0.018;
+
+    // Reproduce by seeding
+    const plantCount = all.filter(o=>o.type==='plant').length;
+    if (this.energy > this.reproThreshold() && plantCount < CFG.plant.max && Math.random()<0.002) {
+      this.energy *= 0.55;
+      births++;
+      const childTraits = mutateTraits({
+        speed:0, size:this.size*0.45, vision:0, reproductionRate:this.reproductionRate
+      });
+      childTraits.speed = 0;
+      return new Plant(
+        clamp(this.x+rand(-80,80),20,W-20),
+        clamp(this.y+rand(-80,80),20,H-20),
+        childTraits, 8
+      );
+    }
+    return null;
+  }
+
+  draw() {
+    const s = this.size;
+    const w = this.leafWave;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.shadowBlur=10; ctx.shadowColor='#44cc22';
+
+    // Stem
+    ctx.strokeStyle='#336622'; ctx.lineWidth=1.2;
+    ctx.beginPath(); ctx.moveTo(0,s*0.6); ctx.lineTo(0,-s*0.3); ctx.stroke();
+
+    // Leaves (3 leaf shapes)
+    for (let i=0;i<3;i++) {
+      const a = this.leafAngle + i*(Math.PI*2/3) + Math.sin(w+i)*0.12;
+      const lr = s*(0.85+0.1*Math.sin(w+i*1.2));
+      ctx.save();
+      ctx.rotate(a);
+      ctx.beginPath();
+      ctx.ellipse(lr*0.5, 0, lr*0.55, lr*0.22, 0, 0, Math.PI*2);
+      const g=ctx.createRadialGradient(lr*0.3,0,0,lr*0.5,0,lr*0.55);
+      g.addColorStop(0,'#aaffaa');
+      g.addColorStop(0.5,'#44cc22');
+      g.addColorStop(1,'#226611');
+      ctx.fillStyle=g; ctx.globalAlpha=0.9; ctx.fill();
+      ctx.restore();
+    }
+
+    // Center bud
+    ctx.beginPath(); ctx.arc(0,0,s*0.22,0,Math.PI*2);
+    ctx.fillStyle='#88ff44'; ctx.globalAlpha=0.95; ctx.fill();
+    ctx.restore();
+
+    // Energy bar
+    this.drawBar(CFG.plant.baseRepro, '#88ff44');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  GLIDER
+// ═══════════════════════════════════════════════════════
+class Glider extends Organism {
+  constructor(x,y,traits,energy) {
+    const t = traits ?? {
+      speed:rand(3.0,5.2), size:rand(3.5,7.5),
+      vision:rand(110,240), reproductionRate:rand(0.8,1.3)
+    };
+    super('glider',x,y,t,energy??CFG.glider.baseEnergy);
+    this.wave=rand(0,Math.PI*2); this.waveSpd=rand(0.08,0.14);
+  }
+
+  update(all) {
+    let tX=0,tY=0,tFound=false,tDist=this.vision;
+    let oX=0,oY=0,oFound=false,oDist=this.vision*1.2;
+    let pX=0,pY=0,pFound=false,pDist=this.vision*1.3;
+
+    for (const o of all) {
+      if (!o.alive||o===this) continue;
+      const d2=dist2(this.x,this.y,o.x,o.y);
+
+      if (o.type==='hunter' && d2<tDist**2) {
+        const d=Math.sqrt(d2);
+        if(d<tDist){tX=o.x;tY=o.y;tFound=true;tDist=d;}
+      }
+      if (o.type==='grower'&&o.size>this.size*1.9&&d2<(tDist*1.1)**2) {
+        const d=Math.sqrt(d2);
+        if(d<tDist*1.1){tX=o.x;tY=o.y;tFound=true;}
+      }
+      if (o.type==='orb'&&d2<oDist**2) {
+        const d=Math.sqrt(d2);
+        if(d<oDist){oX=o.x;oY=o.y;oFound=true;oDist=d;}
+      }
+      if (o.type==='plant'&&o.energy>8&&d2<pDist**2) {
+        const d=Math.sqrt(d2);
+        if(d<pDist){pX=o.x;pY=o.y;pFound=true;pDist=d;}
+      }
+    }
+
+    if (tFound) this.flee(tX,tY,0.30);
+    else if (oFound) this.seek(oX,oY,0.09);
+    else if (pFound) this.seek(pX,pY,0.07);
+    else this.wander(0.28);
+
+    this.limitSpeed(this.speed);
+    this.step();
+    this.wave+=this.waveSpd;
+
+    for (const o of all) {
+      if (!o.alive) continue;
+      if (o.type==='orb'&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
+        this.energy+=o.energy; o.alive=false;
+      }
+      if (o.type==='plant'&&o.energy>5&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size*0.7)**2) {
+        this.energy+=o.energy*0.6; o.energy*=0.3;
+      }
+    }
+
+    const count=all.filter(o=>o.type==='glider').length;
+    if (this.energy>this.reproThreshold()&&count<CFG.glider.max) {
+      this.energy*=0.52; births++; generation++;
+      return new Glider(
+        this.x+rand(-18,18), this.y+rand(-18,18),
+        mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
+        this.energy*0.55
+      );
+    }
+    return null;
+  }
+
+  draw() {
+    this.drawTrail('#3dff70');
+    const pulse=1+0.13*Math.sin(this.wave);
+    const r=this.size*pulse;
+    ctx.save();
+    ctx.shadowBlur=14; ctx.shadowColor='#00ff55';
+    ctx.beginPath(); ctx.arc(this.x,this.y,r,0,Math.PI*2);
+    const g=ctx.createRadialGradient(this.x-r*0.35,this.y-r*0.35,0,this.x,this.y,r);
+    g.addColorStop(0,'#ccffe0'); g.addColorStop(0.55,'#4dff80'); g.addColorStop(1,'#00aa33');
+    ctx.fillStyle=g; ctx.fill();
+    ctx.restore();
+    this.drawBar(this.reproThreshold(),'#3dff70');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  HUNTER
+// ═══════════════════════════════════════════════════════
+class Hunter extends Organism {
+  constructor(x,y,traits,energy) {
+    const t = traits ?? {
+      speed:rand(2.2,3.8), size:rand(7,13),
+      vision:rand(140,300), reproductionRate:rand(0.8,1.35)
+    };
+    super('hunter',x,y,t,energy??CFG.hunter.baseEnergy);
+    this.angle=rand(0,Math.PI*2); this.trailMax=12; this.hunger=0;
+  }
+
+  update(all) {
+    let pX=0,pY=0,pFound=false,pDist=this.vision;
+    let bX=0,bY=0,bFound=false,bDist=this.vision*0.6;
+
+    for (const o of all) {
+      if (!o.alive||o===this) continue;
+      const d2=dist2(this.x,this.y,o.x,o.y);
+
+      if (o.type==='hunter'&&o.size>this.size*1.25&&d2<bDist**2) {
+        const d=Math.sqrt(d2);
+        if(d<bDist){bX=o.x;bY=o.y;bFound=true;bDist=d;}
+      }
+
+      const huntable=(o.type==='glider')||(o.type==='orb')||
+        (o.type==='grower'&&o.size<this.size*0.75)||
+        (o.type==='parasite');
+      if (huntable&&d2<pDist**2&&!inSafeZone(o.x,o.y)) {
+        const d=Math.sqrt(d2);
+        if(d<pDist){pX=o.x;pY=o.y;pFound=true;pDist=d;}
+      }
+    }
+
+    const z=zoneAt(this.x,this.y);
+    const dangerBoost = z?.type==='danger' ? 0.6 : 0;
+
+    if (bFound) this.flee(bX,bY,0.22);
+    else if (pFound) this.seek(pX,pY, 0.17+dangerBoost*0.08);
+    else this.wander(0.30);
+
+    this.limitSpeed(this.speed+(this.hunger>130?0.55:0)+dangerBoost);
+    this.step();
+    this.hunger++;
+
+    if (Math.abs(this.vx)>0.05||Math.abs(this.vy)>0.05)
+      this.angle=Math.atan2(this.vy,this.vx);
+
+    for (const o of all) {
+      if (!o.alive||o===this) continue;
+      if (!['glider','orb','grower','parasite'].includes(o.type)) continue;
+      if (o.type==='grower'&&o.size>=this.size*0.75) continue;
+      if (inSafeZone(o.x,o.y)) continue;
+      if (dist2(this.x,this.y,o.x,o.y)<(this.size+o.size*0.75)**2) {
+        this.energy+=o.size*3.5+12;
+        this.size=Math.min(this.size+0.1,23);
+        this.hunger=0;
+        o.alive=false; o.deathBy='eaten'; deaths++;
+      }
+    }
+
+    const count=all.filter(o=>o.type==='hunter').length;
+    if (this.energy>this.reproThreshold()&&count<CFG.hunter.max) {
+      this.energy*=0.50; births++; generation++;
+      return new Hunter(
+        this.x+rand(-22,22), this.y+rand(-22,22),
+        mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
+        this.energy*0.58
+      );
+    }
+    return null;
+  }
+
+  draw() {
+    this.drawTrail('#ff3333',0.22);
+    ctx.save();
+    ctx.translate(this.x,this.y); ctx.rotate(this.angle+Math.PI/2);
+    ctx.shadowBlur=16; ctx.shadowColor='#ff0000';
+    const s=this.size;
+    ctx.beginPath();
+    ctx.moveTo(0,-s*1.35); ctx.lineTo(-s*0.95,s*0.85);
+    ctx.lineTo(0,s*0.4); ctx.lineTo(s*0.95,s*0.85); ctx.closePath();
+    const g=ctx.createLinearGradient(0,-s*1.35,0,s*0.85);
+    g.addColorStop(0,'#ff9999'); g.addColorStop(0.5,'#ff4444'); g.addColorStop(1,'#aa0000');
+    ctx.fillStyle=g; ctx.fill();
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(-s*0.32,-s*0.28,s*0.22,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc( s*0.32,-s*0.28,s*0.22,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#111';
+    ctx.beginPath(); ctx.arc(-s*0.32+1.2,-s*0.28,s*0.11,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc( s*0.32+1.2,-s*0.28,s*0.11,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    this.drawBar(this.reproThreshold(),'#ff6644');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  GROWER
+// ═══════════════════════════════════════════════════════
+class Grower extends Organism {
+  constructor(x,y,traits,energy) {
+    const t = traits ?? {
+      speed:rand(0.6,1.5), size:rand(12,20),
+      vision:rand(120,280), reproductionRate:rand(0.75,1.25)
+    };
+    super('grower',x,y,t,energy??CFG.grower.baseEnergy);
+    this.blobSeeds=Array.from({length:10},()=>rand(0.65,1.35));
+    this.blobPhase=0; this.blobSpd=rand(0.015,0.035); this.trailMax=6;
+  }
+
+  update(all) {
+    let oX=0,oY=0,oFound=false,oDist=this.vision;
+    let fX=0,fY=0,fFound=false,fDist=this.vision*0.7;
+
+    for (const o of all) {
+      if (!o.alive||o===this) continue;
+      const d2=dist2(this.x,this.y,o.x,o.y);
+      if (o.type==='orb'&&d2<oDist**2) {
+        const d=Math.sqrt(d2); if(d<oDist){oX=o.x;oY=o.y;oFound=true;oDist=d;}
+      }
+      if (o.type==='plant'&&o.energy>10&&d2<oDist**2) {
+        const d=Math.sqrt(d2); if(d<oDist){oX=o.x;oY=o.y;oFound=true;oDist=d;}
+      }
+      if (o.type==='hunter'&&o.size>=this.size*0.65&&d2<fDist**2) {
+        const d=Math.sqrt(d2); if(d<fDist){fX=o.x;fY=o.y;fFound=true;fDist=d;}
+      }
+    }
+
+    if (fFound) this.flee(fX,fY,0.12);
+    else if (oFound) this.seek(oX,oY,0.06);
+    else this.wander(0.18);
+
+    this.limitSpeed(this.speed); this.step(); this.blobPhase+=this.blobSpd;
+
+    for (const o of all) {
+      if (!o.alive) continue;
+      if (o.type==='orb'&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
+        this.energy+=o.energy*1.6; this.size=Math.min(this.size+0.5,40); o.alive=false;
+      }
+      if (o.type==='plant'&&o.energy>6&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
+        this.energy+=o.energy*1.0; this.size=Math.min(this.size+0.2,40); o.energy*=0.1;
+      }
+      if (o.type==='glider'&&this.size>o.size*2.8&&dist2(this.x,this.y,o.x,o.y)<(this.size*0.85)**2) {
+        this.energy+=o.energy*0.8; this.size=Math.min(this.size+0.15,40);
+        o.alive=false; o.deathBy='eaten'; deaths++;
+      }
+    }
+
+    const count=all.filter(o=>o.type==='grower').length;
+    if (this.energy>this.reproThreshold()&&count<CFG.grower.max) {
+      this.energy*=0.50; this.size*=0.78; births++; generation++;
+      return new Grower(
+        this.x+rand(-30,30), this.y+rand(-30,30),
+        mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
+        this.energy*0.52
+      );
+    }
+    return null;
+  }
+
+  draw() {
+    this.drawTrail('#2266ff',0.14);
+    const n=this.blobSeeds.length;
+    ctx.save();
+    ctx.shadowBlur=22; ctx.shadowColor='#2244ff';
+    ctx.beginPath();
+    for (let i=0;i<=n;i++) {
+      const idx=i%n, t=this.blobPhase;
+      const r=this.size*this.blobSeeds[idx]*(1+0.12*Math.sin(t+idx*1.4));
+      const ang=(idx/n)*Math.PI*2-Math.PI/2;
+      const px=this.x+Math.cos(ang)*r, py=this.y+Math.sin(ang)*r;
+      i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+    const g=ctx.createRadialGradient(this.x-this.size*0.3,this.y-this.size*0.3,0,this.x,this.y,this.size*1.1);
+    g.addColorStop(0,'#aaddff'); g.addColorStop(0.45,'#4da6ff'); g.addColorStop(1,'#002299');
+    ctx.fillStyle=g; ctx.globalAlpha=0.88; ctx.fill(); ctx.globalAlpha=1;
+    ctx.restore();
+    this.drawBar(this.reproThreshold(),'#4da6ff');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  PARASITE
+// ═══════════════════════════════════════════════════════
+class Parasite extends Organism {
+  constructor(x,y,traits,energy) {
+    const t = traits ?? {
+      speed:rand(1.6,3.5), size:rand(2,5.5),
+      vision:rand(150,340), reproductionRate:rand(0.85,1.4)
+    };
+    super('parasite',x,y,t,energy??CFG.parasite.baseEnergy);
+    this.hostId    = null;
+    this.attachTimer = 0;
+    this.pulse     = rand(0,Math.PI*2);
+    this.trailMax  = 8;
+  }
+
+  findHost(all) {
+    let best=null, bd=this.vision**2;
+    for (const o of all) {
+      if (!o.alive||o===this) continue;
+      if (!['glider','grower','hunter'].includes(o.type)) continue;
+      if (inSafeZone(o.x,o.y)) continue;
+      const d2=dist2(this.x,this.y,o.x,o.y);
+      if (d2<bd) { best=o; bd=d2; }
+    }
+    return best;
+  }
+
+  update(all) {
+    this.pulse+=0.12;
+
+    // Find host reference
+    let host = this.hostId != null ? all.find(o=>o.id===this.hostId&&o.alive) : null;
+
+    if (host && inSafeZone(host.x, host.y)) { host=null; this.hostId=null; }
+
+    if (!host) {
+      this.hostId=null;
+      const target=this.findHost(all);
+      if (target) this.seek(target.x,target.y,0.20);
+      else this.wander(0.28);
+
+      this.limitSpeed(this.speed); this.step();
+
+      // Attach on contact
+      if (target && dist2(this.x,this.y,target.x,target.y)<(this.size+target.size*0.7)**2) {
+        this.hostId=target.id;
+      }
+    } else {
+      // Attached: ride host, drain energy
+      this.x = host.x + Math.cos(this.attachTimer*0.05)*( host.size*0.7);
+      this.y = host.y + Math.sin(this.attachTimer*0.05)*( host.size*0.7);
+      this.attachTimer++;
+      this.vx=0; this.vy=0;
+      this.age++;
+
+      const drain=0.18+this.size*0.02;
+      host.energy-=drain;
+      this.energy+=drain*0.7;
+
+      if (host.energy<3) { host.alive=false; host.deathBy='parasite'; deaths++; this.hostId=null; }
+
+      // Detach sometimes randomly
+      if (Math.random()<0.001) { this.hostId=null; this.vx=rand(-1,1)*this.speed; this.vy=rand(-1,1)*this.speed; }
+
+      if (this.energy<=0) { this.alive=false; this.deathBy='starvation'; deaths++; return null; }
+      if (this.age>=this.maxAge) { this.alive=false; this.deathBy='old age'; deaths++; return null; }
+    }
+
+    const count=all.filter(o=>o.type==='parasite').length;
+    if (this.energy>this.reproThreshold()&&count<CFG.parasite.max) {
+      this.energy*=0.52; births++; generation++;
+      return new Parasite(
+        this.x+rand(-15,15), this.y+rand(-15,15),
+        mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
+        this.energy*0.5
+      );
+    }
+    return null;
+  }
+
+  draw() {
+    const p=1+0.25*Math.sin(this.pulse);
+    const r=this.size*p;
+    ctx.save();
+    ctx.shadowBlur=10; ctx.shadowColor='#ff44bb';
+    // Tentacle lines when attached
+    if (this.hostId!=null) {
+      ctx.strokeStyle='rgba(255,68,187,0.4)';
+      ctx.lineWidth=0.8;
+      for (let i=0;i<4;i++) {
+        const a=(this.attachTimer*0.05+i*(Math.PI/2));
+        ctx.beginPath();
+        ctx.moveTo(this.x,this.y);
+        ctx.lineTo(this.x+Math.cos(a)*r*2.5, this.y+Math.sin(a)*r*2.5);
+        ctx.stroke();
+      }
+    }
+    const g=ctx.createRadialGradient(this.x,this.y,0,this.x,this.y,r);
+    g.addColorStop(0,'#ffaadd');
+    g.addColorStop(0.5,'#ff44bb');
+    g.addColorStop(1,'rgba(180,0,100,0.5)');
+    ctx.beginPath(); ctx.arc(this.x,this.y,r,0,Math.PI*2);
+    ctx.fillStyle=g; ctx.globalAlpha=0.85; ctx.fill();
+    ctx.restore();
+    this.drawBar(this.reproThreshold(),'#ff44bb');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RARE (Pulsarite)
+// ═══════════════════════════════════════════════════════
+class Rare extends Organism {
+  constructor(x,y) {
+    const t={ speed:rand(2.2,3.4), size:rand(9,16), vision:rand(200,380), reproductionRate:rand(1.5,2.5) };
+    super('rare',x??rand(50,W-50),y??rand(50,H-50),t,200);
+    this.spin=rand(0,Math.PI*2);
+    this.spinSpd=rand(0.02,0.06)*(Math.random()<0.5?1:-1);
+    this.spikes=randInt(5,9); this.hue=randInt(260,310); this.trailMax=14;
+  }
+
+  update(all) {
+    let nearThreat=null,nd2=this.vision**2;
+    for (const o of all) {
+      if (!o.alive||o===this) continue;
+      const d2=dist2(this.x,this.y,o.x,o.y);
+      if ((o.type==='hunter'||o.type==='grower')&&o.size>=this.size*0.5&&d2<nd2) { nearThreat=o;nd2=d2; }
+    }
+    if (nearThreat) this.flee(nearThreat.x,nearThreat.y,0.28);
+    else {
+      let best=null,bd=this.vision**2;
+      for (const o of all) {
+        if (!o.alive||o.type!=='orb') continue;
+        const d2=dist2(this.x,this.y,o.x,o.y);
+        if(d2<bd){best=o;bd=d2;}
+      }
+      if (best) this.seek(best.x,best.y,0.11);
+      else this.wander(0.30);
+    }
+    this.limitSpeed(this.speed); this.step(); this.spin+=this.spinSpd;
+    for (const o of all) {
+      if (!o.alive||o.type!=='orb') continue;
+      if (dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) { this.energy+=o.energy*2.2; o.alive=false; }
+    }
+    return null;
+  }
+
+  draw() {
+    this.drawTrail(`hsl(${this.hue},100%,60%)`,0.22);
+    ctx.save();
+    ctx.translate(this.x,this.y); ctx.rotate(this.spin);
+    ctx.shadowBlur=24; ctx.shadowColor=`hsl(${this.hue},100%,60%)`;
+    ctx.beginPath();
+    for (let i=0;i<this.spikes*2;i++) {
+      const ang=(i/(this.spikes*2))*Math.PI*2-Math.PI/2;
+      const r=(i%2===0)?this.size:this.size*0.42;
+      i===0?ctx.moveTo(Math.cos(ang)*r,Math.sin(ang)*r):ctx.lineTo(Math.cos(ang)*r,Math.sin(ang)*r);
+    }
+    ctx.closePath();
+    const g=ctx.createRadialGradient(0,0,0,0,0,this.size);
+    g.addColorStop(0,'#ffffff');
+    g.addColorStop(0.3,`hsl(${this.hue},100%,80%)`);
+    g.addColorStop(1,`hsl(${this.hue+20},100%,35%)`);
+    ctx.fillStyle=g; ctx.fill();
+    ctx.restore();
+    this.drawBar(200,`hsl(${this.hue},80%,65%)`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  WORLD
+// ═══════════════════════════════════════════════════════
+let entities=[];
+
+function populate() {
+  entities=[];
+  buildZones();
+  for (let i=0;i<CFG.glider.init;i++)   entities.push(new Glider());
+  for (let i=0;i<CFG.hunter.init;i++)   entities.push(new Hunter());
+  for (let i=0;i<CFG.grower.init;i++)   entities.push(new Grower());
+  for (let i=0;i<CFG.plant.init;i++)    entities.push(new Plant());
+  for (let i=0;i<CFG.parasite.init;i++) entities.push(new Parasite());
+  for (let i=0;i<30;i++)                entities.push(new EnergyOrb());
+}
+
+// ═══════════════════════════════════════════════════════
+//  ALERT
+// ═══════════════════════════════════════════════════════
+const alertEl=document.getElementById('alert');
+let alertTimer=0;
+function showAlert(msg) { alertEl.textContent=msg; alertEl.style.opacity=1; alertTimer=200; }
+
+// ═══════════════════════════════════════════════════════
+//  UPDATE
+// ═══════════════════════════════════════════════════════
+function update() {
+  // Spawn orbs
+  if (entities.filter(e=>e.type==='orb').length<CFG.orb.max && Math.random()<CFG.orb.rate)
+    entities.push(new EnergyOrb());
+
+  // Spawn rare
+  if (entities.filter(e=>e.type==='rare').length<CFG.rare.max && Math.random()<CFG.rare.chance)
+    entities.push(new Rare());
+
+  // Count live species
+  const cnt={};
+  for (const e of entities) cnt[e.type]=(cnt[e.type]||0)+1;
+
+  // Self-balance respawns
+  if (!cnt.glider   && frame%90===0)  { showAlert('Gliders Recolonise!');  for(let i=0;i<5;i++) entities.push(new Glider()); }
+  if (!cnt.hunter   && frame%180===0) { showAlert('New Hunter Pack!');     for(let i=0;i<3;i++) entities.push(new Hunter()); }
+  if (!cnt.grower   && frame%120===0) { showAlert('Growers Return!');      for(let i=0;i<3;i++) entities.push(new Grower()); }
+  if (!cnt.plant    && frame%60===0)  { showAlert('Plants Regrow!');       for(let i=0;i<6;i++) entities.push(new Plant()); }
+  if (!cnt.parasite && frame%240===0) { showAlert('Parasites Emerge!');    for(let i=0;i<4;i++) entities.push(new Parasite()); }
+
+  if (alertTimer>0&&--alertTimer===0) alertEl.style.opacity=0;
+
+  // Tick orbs
+  for (const e of entities) if (e.type==='orb') e.update();
+
+  // Tick organisms
+  const offspring=[];
+  for (const e of entities) {
+    if (!e.alive||e.type==='orb') continue;
+    const child=e.update(entities);
+    if (child) offspring.push(child);
+  }
+  entities.push(...offspring);
+  entities=entities.filter(e=>e.alive);
+
+  frame++;
+}
+
+// ═══════════════════════════════════════════════════════
+//  STATS HUD
+// ═══════════════════════════════════════════════════════
+function updateStats(layers) {
+  const types=['glider','hunter','grower','parasite','plant'];
+  const keys =['gli','hun','grw','par','plt'];
+
+  let oldestOrg=null, oldestAge=0;
+
+  for (let i=0;i<types.length;i++) {
+    const arr=layers[types[i]]||[];
+    const prefix='t-'+keys[i];
+    document.getElementById(prefix+'-spd').textContent = fmt1(avgTrait(arr,'speed'));
+    document.getElementById(prefix+'-siz').textContent = fmt1(avgTrait(arr,'size'));
+    document.getElementById(prefix+'-vis').textContent = avgTrait(arr,'vision')!=null ? Math.round(avgTrait(arr,'vision')) : '—';
+    document.getElementById(prefix+'-rpr').textContent = fmt1(avgTrait(arr,'reproductionRate'));
+    document.getElementById(prefix+'-age').textContent = avgTrait(arr,'age')!=null ? Math.round(avgTrait(arr,'age')) : '—';
+    for (const o of arr) { if (o.age>oldestAge){oldestAge=o.age;oldestOrg=o;} }
+  }
+
+  if (oldestOrg) {
+    const label=oldestOrg.type.charAt(0).toUpperCase()+oldestOrg.type.slice(1);
+    document.getElementById('oldest-val').textContent=`${label} #${oldestOrg.id} (age ${oldestOrg.age})`;
+  } else {
+    document.getElementById('oldest-val').textContent='—';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════
+function render() {
+  ctx.fillStyle='rgba(7,7,26,0.82)';
+  ctx.fillRect(0,0,W,H);
+
+  // Grid
+  ctx.save();
+  ctx.strokeStyle='rgba(255,255,255,0.016)'; ctx.lineWidth=0.5;
+  for (let x=0;x<W;x+=58) { ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
+  for (let y=0;y<H;y+=58) { ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
+  ctx.restore();
+
+  drawZones();
+
+  const layers={orb:[],plant:[],grower:[],glider:[],hunter:[],parasite:[],rare:[]};
+  for (const e of entities) if (layers[e.type]) layers[e.type].push(e);
+
+  for (const e of layers.orb)      e.draw();
+  for (const e of layers.plant)    e.draw();
+  for (const e of layers.grower)   e.draw();
+  for (const e of layers.glider)   e.draw();
+  for (const e of layers.hunter)   e.draw();
+  for (const e of layers.parasite) e.draw();
+  for (const e of layers.rare)     e.draw();
+
+  if (frame%10===0) {
+    document.getElementById('p-gli').textContent = layers.glider.length;
+    document.getElementById('p-hun').textContent = layers.hunter.length;
+    document.getElementById('p-grw').textContent = layers.grower.length;
+    document.getElementById('p-plt').textContent = layers.plant.length;
+    document.getElementById('p-par').textContent = layers.parasite.length;
+    document.getElementById('p-orb').textContent = layers.orb.length;
+    document.getElementById('p-rar').textContent = layers.rare.length;
+    document.getElementById('m-gen').textContent = generation;
+    document.getElementById('m-births').textContent = births;
+    document.getElementById('m-deaths').textContent = deaths;
+    const sec=Math.floor((Date.now()-T0)/1000);
+    document.getElementById('m-time').textContent = sec<60?sec+'s':Math.floor(sec/60)+'m '+(sec%60)+'s';
+    updateStats(layers);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════════════
+populate();
+(function loop() { update(); render(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>

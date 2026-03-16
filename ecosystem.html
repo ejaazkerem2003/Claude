@@ -89,6 +89,12 @@ canvas { display:block; }
   <div class="mi">Elapsed <span id="m-time">0s</span></div>
   <div class="mi">Births <span id="m-births">0</span></div>
   <div class="mi">Deaths <span id="m-deaths">0</span></div>
+  <hr class="div">
+  <div class="mi" style="color:#334">Deaths by cause</div>
+  <div class="mi">Starvation <span id="d-starv" style="color:#ff8844">0</span></div>
+  <div class="mi">Old Age <span id="d-age" style="color:#8888aa">0</span></div>
+  <div class="mi">Predation <span id="d-pred" style="color:#ff4444">0</span></div>
+  <div class="mi">Parasite <span id="d-para" style="color:#ff44bb">0</span></div>
 </div>
 
 <!-- ── Trait stats panel ── -->
@@ -114,6 +120,15 @@ canvas { display:block; }
     </tbody>
   </table>
   <div id="oldest">Oldest: <span id="oldest-val">—</span></div>
+  <hr class="div" style="margin-top:8px">
+  <div style="font-size:10px;color:#556;margin-bottom:4px;letter-spacing:1px;text-transform:uppercase">Births by Species</div>
+  <div style="display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:10px">
+    <span style="color:#4dff80">Gliders</span> <span id="b-gli" style="color:#4dff80;text-align:right">0</span>
+    <span style="color:#ff4d4d">Hunters</span> <span id="b-hun" style="color:#ff4d4d;text-align:right">0</span>
+    <span style="color:#4da6ff">Growers</span> <span id="b-grw" style="color:#4da6ff;text-align:right">0</span>
+    <span style="color:#88ff44">Plants</span>  <span id="b-plt" style="color:#88ff44;text-align:right">0</span>
+    <span style="color:#ff44bb">Parasites</span><span id="b-par" style="color:#ff44bb;text-align:right">0</span>
+  </div>
 </div>
 
 <div id="zlegend">
@@ -135,19 +150,75 @@ let H = canvas.height = window.innerHeight;
 window.addEventListener('resize', () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; });
 
 let UID = 0, frame = 0, generation = 0, births = 0, deaths = 0;
+
+// ── Phase 1 stat tracking ──────────────────────────────
+const deathsBy = { starvation:0, age:0, predation:0, parasite:0 };
+const birthsBy = { glider:0, hunter:0, grower:0, plant:0, parasite:0 };
+
 const T0 = Date.now();
 
 // ═══════════════════════════════════════════════════════
 //  CONFIG
 // ═══════════════════════════════════════════════════════
+// ── All values tunable — adjust here to rebalance without touching logic ──
 const CFG = {
-  glider  : { init:26, max:65,  baseRepro:80,  maxAge:3200, baseEnergy:50,  maxEnergy:150 },
-  hunter  : { init:9,  max:25,  baseRepro:110, maxAge:4000, baseEnergy:65,  maxEnergy:200 },
-  grower  : { init:6,  max:16,  baseRepro:145, maxAge:5000, baseEnergy:80,  maxEnergy:240 },
-  plant   : { init:18, max:35,  baseRepro:70,  maxAge:4500, baseEnergy:10,  maxEnergy:120 },
-  parasite: { init:8,  max:22,  baseRepro:60,  maxAge:2200, baseEnergy:30,  maxEnergy:90  },
-  orb     : { max:50,  rate:0.038 },
-  rare    : { max:4,   chance:0.00022 },
+  glider: {
+    init:26, max:65, baseEnergy:50, maxEnergy:150,
+    maxAge:3200,
+    drain:1.0,            // energy drain multiplier relative to base formula
+    baseRepro:80,         // energy threshold base (scaled by reproductionRate)
+    minReproAge:180,      // must reach this age before first reproduction
+    reproEnergyCost:0.50, // fraction of energy spent on reproduction
+    reproCooldown:300,    // ticks before can reproduce again (~5 s at 60 fps)
+    extThreshold:4,       // respawn triggered when population drops below this
+  },
+  hunter: {
+    init:9, max:25, baseEnergy:65, maxEnergy:200,
+    maxAge:3500,
+    drain:1.65,           // hunters burn ~65% more energy — predators pay more
+    baseRepro:110,
+    minReproAge:320,      // hunters mature more slowly
+    reproEnergyCost:0.55,
+    reproCooldown:500,    // ~8 s — hunters reproduce slowly
+    extThreshold:2,
+  },
+  grower: {
+    init:6, max:16, baseEnergy:80, maxEnergy:240,
+    maxAge:5000,
+    drain:1.2,
+    baseRepro:145,
+    minReproAge:400,
+    reproEnergyCost:0.50,
+    reproCooldown:400,
+    extThreshold:2,
+    // Grower plant-seeding constants
+    seedRadius:160,       // scatter plants within this radius (px)
+    seedInterval:200,     // ticks between seed attempts
+    seedCost:12,          // energy cost per seed
+    seedLocalMax:4,       // skip seeding if >= this many plants already nearby
+  },
+  plant: {
+    init:18, max:35, baseEnergy:10, maxEnergy:120,
+    maxAge:4500,
+    drain:0,              // plants have no movement drain; self-regen handled in update()
+    baseRepro:70,
+    minReproAge:150,
+    reproEnergyCost:0.55,
+    reproCooldown:600,
+    extThreshold:6,
+  },
+  parasite: {
+    init:8, max:22, baseEnergy:30, maxEnergy:90,
+    maxAge:2200,
+    drain:0.8,
+    baseRepro:60,
+    minReproAge:100,
+    reproEnergyCost:0.52,
+    reproCooldown:200,
+    extThreshold:2,
+  },
+  orb  : { max:50, rate:0.038 },
+  rare : { max:4,  chance:0.00022 },
 };
 
 // ═══════════════════════════════════════════════════════
@@ -227,13 +298,14 @@ class Organism {
     this.vision           = traits.vision;
     this.reproductionRate = traits.reproductionRate;
     // state
-    this.energy    = energy ?? 50;
-    this.maxEnergy = CFG[type]?.maxEnergy ?? 200;
-    this.age       = 0;
-    this.maxAge    = CFG[type]?.maxAge ?? 3000;
-    this.alive        = true;
-    this.deathBy      = null;
-    this.parasiteLoad = 0;   // how many parasites are currently attached
+    this.energy        = energy ?? 50;
+    this.maxEnergy     = CFG[type]?.maxEnergy ?? 200;
+    this.age           = 0;
+    this.maxAge        = CFG[type]?.maxAge ?? 3000;
+    this.reproCooldown = 0;   // ticks remaining before reproduction is allowed
+    this.alive         = true;
+    this.deathBy       = null;
+    this.parasiteLoad  = 0;   // how many parasites are currently attached
     // physics
     this.vx = rand(-1,1)*this.speed;
     this.vy = rand(-1,1)*this.speed;
@@ -254,10 +326,12 @@ class Organism {
 
     if (this.energy > this.maxEnergy) this.energy = this.maxEnergy;
     this.age++;
+    if (this.reproCooldown > 0) this.reproCooldown--;
 
-    // Zone effects
+    // Zone effects + per-species drain multiplier
     const z = zoneAt(this.x, this.y);
-    let drain = 0.055 + this.size*0.0018;
+    const speciesDrain = CFG[this.type]?.drain ?? 1.0;
+    let drain = (0.055 + this.size*0.0018) * speciesDrain;
     if (z) {
       if (z.type==='food')   drain *= 0.45;
       if (z.type==='danger') drain *= 1.8;
@@ -265,8 +339,8 @@ class Organism {
     }
     this.energy -= drain;
 
-    if (this.energy <= 0)      { this.alive=false; this.deathBy='starvation'; deaths++; }
-    if (this.age >= this.maxAge){ this.alive=false; this.deathBy='old age';   deaths++; }
+    if (this.energy <= 0)       { this.alive=false; this.deathBy='starvation'; deaths++; deathsBy.starvation++; }
+    if (this.age >= this.maxAge) { this.alive=false; this.deathBy='age';       deaths++; deathsBy.age++;        }
   }
 
   seek(tx, ty, f=0.1) {
@@ -317,6 +391,24 @@ class Organism {
   }
 
   reproThreshold() { return CFG[this.type].baseRepro * this.reproductionRate; }
+
+  // Returns true when all Phase 1 reproduction gates are satisfied
+  canReproduce(liveCount, cap) {
+    return this.energy         >  this.reproThreshold()
+        && this.reproCooldown  <= 0
+        && this.age            >= (CFG[this.type]?.minReproAge ?? 0)
+        && liveCount           <  cap;
+  }
+
+  // Deduct cost, start cooldown, update counters — call before building child
+  afterReproduce() {
+    const cfg = CFG[this.type];
+    this.energy       *= (cfg?.reproEnergyCost ?? 0.50);
+    this.reproCooldown = (cfg?.reproCooldown   ?? 180);
+    births++;
+    birthsBy[this.type] = (birthsBy[this.type] || 0) + 1;
+    generation++;
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -364,31 +456,26 @@ class Plant extends Organism {
 
   update(all) {
     this.age++;
+    if (this.reproCooldown > 0) this.reproCooldown--;
 
-    // Passive energy production (more in food zones)
+    // Age death
+    if (this.age >= this.maxAge) { this.alive=false; this.deathBy='age'; deaths++; deathsBy.age++; return null; }
+
+    // Passive energy production — more in food zones
     const z = zoneAt(this.x,this.y);
     let regen = 0.045 * this.size * 0.08;
     if (z?.type==='food') regen *= 2.2;
-    this.energy += regen;
-
-    // Age death
-    if (this.age >= this.maxAge) { this.alive=false; this.deathBy='old age'; deaths++; return null; }
-    // Max energy cap
-    if (this.energy > 120) this.energy = 120;
+    this.energy = Math.min(this.energy + regen, this.maxEnergy);
 
     // Grow with energy
     if (this.energy > 30) this.size = Math.min(this.size + 0.004, 14);
-
     this.leafWave += 0.018;
 
-    // Reproduce by seeding
+    // Reproduce by seeding — needs minimum age, energy threshold, and cooldown
     const plantCount = all.filter(o=>o.type==='plant').length;
-    if (this.energy > this.reproThreshold() && plantCount < CFG.plant.max && Math.random()<0.002) {
-      this.energy *= 0.55;
-      births++;
-      const childTraits = mutateTraits({
-        speed:0, size:this.size*0.45, vision:0, reproductionRate:this.reproductionRate
-      });
+    if (this.canReproduce(plantCount, CFG.plant.max) && Math.random() < 0.002) {
+      this.afterReproduce();
+      const childTraits = mutateTraits({ speed:0, size:this.size*0.45, vision:0, reproductionRate:this.reproductionRate });
       childTraits.speed = 0;
       return new Plant(
         clamp(this.x+rand(-80,80),20,W-20),
@@ -492,7 +579,7 @@ class Glider extends Organism {
       }
       if (o.type==='plant'&&o.energy>5&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size*0.7)**2) {
         this.energy+=o.energy*0.75;           // plant gives energy to glider
-        o.alive=false; deaths++;              // plant is fully consumed
+        o.alive=false; o.deathBy='eaten'; deaths++; deathsBy.predation++;
         const nPlt=entities.filter(e=>e.type==='plant').length;
         if (nPlt<CFG.plant.max)              // respawn plant at random location
           pendingSpawns.push(new Plant(rand(20,W-20),rand(20,H-20)));
@@ -500,8 +587,8 @@ class Glider extends Organism {
     }
 
     const count=all.filter(o=>o.type==='glider').length;
-    if (this.energy>this.reproThreshold()&&count<CFG.glider.max) {
-      this.energy*=0.52; births++; generation++;
+    if (this.canReproduce(count, CFG.glider.max)) {
+      this.afterReproduce();
       return new Glider(
         this.x+rand(-18,18), this.y+rand(-18,18),
         mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
@@ -584,13 +671,13 @@ class Hunter extends Organism {
         this.energy+=o.size*3.5+12;
         this.size=Math.min(this.size+0.1,23);
         this.hunger=0;
-        o.alive=false; o.deathBy='eaten'; deaths++;
+        o.alive=false; o.deathBy='eaten'; deaths++; deathsBy.predation++;
       }
     }
 
     const count=all.filter(o=>o.type==='hunter').length;
-    if (this.energy>this.reproThreshold()&&count<CFG.hunter.max) {
-      this.energy*=0.50; births++; generation++;
+    if (this.canReproduce(count, CFG.hunter.max)) {
+      this.afterReproduce();
       return new Hunter(
         this.x+rand(-22,22), this.y+rand(-22,22),
         mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
@@ -636,6 +723,8 @@ class Grower extends Organism {
     super('grower',x,y,t,energy??CFG.grower.baseEnergy);
     this.blobSeeds=Array.from({length:10},()=>rand(0.65,1.35));
     this.blobPhase=0; this.blobSpd=rand(0.015,0.035); this.trailMax=6;
+    // Stagger initial seed timers so all growers don't seed simultaneously
+    this.seedTimer=randInt(0, CFG.grower.seedInterval);
   }
 
   update(all) {
@@ -662,15 +751,24 @@ class Grower extends Organism {
 
     this.limitSpeed(this.speed); this.step(); this.blobPhase+=this.blobSpd;
 
-    // Growers slowly seed new plants nearby (costs energy)
-    if (this.energy>60 && Math.random()<0.0014) {
-      const nPlt=entities.filter(e=>e.type==='plant').length+pendingSpawns.filter(e=>e.type==='plant').length;
-      if (nPlt<CFG.plant.max) {
-        this.energy-=10;
-        pendingSpawns.push(new Plant(
-          clamp(this.x+rand(-150,150),20,W-20),
-          clamp(this.y+rand(-150,150),20,H-20)
-        ));
+    // Seeding: count-down timer, local density check, tunable constants
+    if (this.seedTimer > 0) {
+      this.seedTimer--;
+    } else {
+      this.seedTimer = CFG.grower.seedInterval;
+      if (this.energy > CFG.grower.seedCost * 2) {
+        const localPlants = all.filter(o =>
+          o.type==='plant' && dist2(this.x,this.y,o.x,o.y) < CFG.grower.seedRadius**2
+        ).length;
+        const totalPlants = entities.filter(e=>e.type==='plant').length
+                          + pendingSpawns.filter(e=>e.type==='plant').length;
+        if (localPlants < CFG.grower.seedLocalMax && totalPlants < CFG.plant.max) {
+          this.energy -= CFG.grower.seedCost;
+          pendingSpawns.push(new Plant(
+            clamp(this.x+rand(-CFG.grower.seedRadius,CFG.grower.seedRadius),20,W-20),
+            clamp(this.y+rand(-CFG.grower.seedRadius,CFG.grower.seedRadius),20,H-20)
+          ));
+        }
       }
     }
 
@@ -682,20 +780,21 @@ class Grower extends Organism {
       if (o.type==='plant'&&o.energy>6&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
         this.energy+=o.energy;                // grower absorbs all plant energy
         this.size=Math.min(this.size+0.2,40);
-        o.alive=false; deaths++;              // plant is fully consumed
+        o.alive=false; o.deathBy='eaten'; deaths++; deathsBy.predation++;
         const nPlt=entities.filter(e=>e.type==='plant').length;
         if (nPlt<CFG.plant.max)              // respawn plant at random location
           pendingSpawns.push(new Plant(rand(20,W-20),rand(20,H-20)));
       }
       if (o.type==='glider'&&this.size>o.size*2.8&&dist2(this.x,this.y,o.x,o.y)<(this.size*0.85)**2) {
         this.energy+=o.energy*0.8; this.size=Math.min(this.size+0.15,40);
-        o.alive=false; o.deathBy='eaten'; deaths++;
+        o.alive=false; o.deathBy='eaten'; deaths++; deathsBy.predation++;
       }
     }
 
     const count=all.filter(o=>o.type==='grower').length;
-    if (this.energy>this.reproThreshold()&&count<CFG.grower.max) {
-      this.energy*=0.50; this.size*=0.78; births++; generation++;
+    if (this.canReproduce(count, CFG.grower.max)) {
+      this.size *= 0.78;   // growers shrink when they split
+      this.afterReproduce();
       return new Grower(
         this.x+rand(-30,30), this.y+rand(-30,30),
         mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
@@ -816,9 +915,12 @@ class Parasite extends Organism {
 
       // Host dies from infection
       if (host.energy <= 0) {
-        host.alive = false; host.deathBy = 'parasite'; deaths++;
+        host.alive = false; host.deathBy = 'parasite'; deaths++; deathsBy.parasite++;
         this._detach(host); host = null;
       }
+
+      // Tick reproCooldown while attached (step() is not called in this branch)
+      if (this.reproCooldown > 0) this.reproCooldown--;
 
       if (host) {
         // ── INFECTION SPREAD ──────────────────────────────
@@ -855,14 +957,14 @@ class Parasite extends Organism {
         }
       }
 
-      if (this.energy <= 0) { this.alive=false; this.deathBy='starvation'; deaths++; return null; }
-      if (this.age >= this.maxAge) { this.alive=false; this.deathBy='old age'; deaths++; return null; }
+      if (this.energy <= 0)       { this.alive=false; this.deathBy='starvation'; deaths++; deathsBy.starvation++; return null; }
+      if (this.age >= this.maxAge) { this.alive=false; this.deathBy='age';       deaths++; deathsBy.age++;        return null; }
     }
 
-    // Reproduce via standard energy threshold
+    // Reproduce via earned gates: minimum age, energy threshold, cooldown
     const count = all.filter(o=>o.type==='parasite').length;
-    if (this.energy > this.reproThreshold() && count < CFG.parasite.max) {
-      this.energy *= 0.52; births++; generation++;
+    if (this.canReproduce(count, CFG.parasite.max)) {
+      this.afterReproduce();
       return new Parasite(
         this.x+rand(-15,15), this.y+rand(-15,15),
         mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
@@ -1018,12 +1120,19 @@ function update() {
   const cnt={};
   for (const e of entities) cnt[e.type]=(cnt[e.type]||0)+1;
 
-  // Self-balance respawns
-  if (!cnt.glider   && frame%90===0)  { showAlert('Gliders Recolonise!');  for(let i=0;i<5;i++) entities.push(new Glider()); }
-  if (!cnt.hunter   && frame%180===0) { showAlert('New Hunter Pack!');     for(let i=0;i<3;i++) entities.push(new Hunter()); }
-  if (!cnt.grower   && frame%120===0) { showAlert('Growers Return!');      for(let i=0;i<3;i++) entities.push(new Grower()); }
-  if (!cnt.plant    && frame%60===0)  { showAlert('Plants Regrow!');       for(let i=0;i<6;i++) entities.push(new Plant()); }
-  if (!cnt.parasite && frame%240===0) { showAlert('Parasites Emerge!');    for(let i=0;i<4;i++) entities.push(new Parasite()); }
+  // Threshold-based extinction recovery — triggers at extThreshold, not just zero
+  const g=cnt.glider||0, h=cnt.hunter||0, gr=cnt.grower||0,
+        pl=cnt.plant||0,  pa=cnt.parasite||0;
+  if (g  < CFG.glider.extThreshold   && frame%90===0)
+    { showAlert('GLIDERS RECOLONISE!');  for(let i=0;i<5;i++) entities.push(new Glider());   }
+  if (h  < CFG.hunter.extThreshold   && frame%180===0)
+    { showAlert('HUNTERS MIGRATE!');     for(let i=0;i<3;i++) entities.push(new Hunter());   }
+  if (gr < CFG.grower.extThreshold   && frame%120===0)
+    { showAlert('GROWERS RETURN!');      for(let i=0;i<3;i++) entities.push(new Grower());   }
+  if (pl < CFG.plant.extThreshold    && frame%60===0)
+    { showAlert('PLANT BLOOM!');         for(let i=0;i<6;i++) entities.push(new Plant());    }
+  if (pa < CFG.parasite.extThreshold && frame%240===0)
+    { showAlert('PARASITES EMERGE!');    for(let i=0;i<4;i++) entities.push(new Parasite()); }
 
   if (alertTimer>0&&--alertTimer===0) alertEl.style.opacity=0;
 
@@ -1122,9 +1231,20 @@ function render() {
     document.getElementById('p-par').textContent = layers.parasite.length;
     document.getElementById('p-orb').textContent = layers.orb.length;
     document.getElementById('p-rar').textContent = layers.rare.length;
-    document.getElementById('m-gen').textContent = generation;
+    document.getElementById('m-gen').textContent    = generation;
     document.getElementById('m-births').textContent = births;
     document.getElementById('m-deaths').textContent = deaths;
+    // Death-cause breakdown
+    document.getElementById('d-starv').textContent = deathsBy.starvation;
+    document.getElementById('d-age').textContent   = deathsBy.age;
+    document.getElementById('d-pred').textContent  = deathsBy.predation;
+    document.getElementById('d-para').textContent  = deathsBy.parasite;
+    // Births by species
+    document.getElementById('b-gli').textContent = birthsBy.glider   || 0;
+    document.getElementById('b-hun').textContent = birthsBy.hunter   || 0;
+    document.getElementById('b-grw').textContent = birthsBy.grower   || 0;
+    document.getElementById('b-plt').textContent = birthsBy.plant    || 0;
+    document.getElementById('b-par').textContent = birthsBy.parasite || 0;
     const sec=Math.floor((Date.now()-T0)/1000);
     document.getElementById('m-time').textContent = sec<60?sec+'s':Math.floor(sec/60)+'m '+(sec%60)+'s';
     updateStats(layers);

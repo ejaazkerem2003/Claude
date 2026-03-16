@@ -141,11 +141,11 @@ const T0 = Date.now();
 //  CONFIG
 // ═══════════════════════════════════════════════════════
 const CFG = {
-  glider  : { init:26, max:65,  baseRepro:80,  maxAge:3200, baseEnergy:50  },
-  hunter  : { init:9,  max:25,  baseRepro:110, maxAge:4000, baseEnergy:65  },
-  grower  : { init:6,  max:16,  baseRepro:145, maxAge:5000, baseEnergy:80  },
-  plant   : { init:18, max:35,  baseRepro:70,  maxAge:4500, baseEnergy:10  },
-  parasite: { init:8,  max:22,  baseRepro:60,  maxAge:2200, baseEnergy:30  },
+  glider  : { init:26, max:65,  baseRepro:80,  maxAge:3200, baseEnergy:50,  maxEnergy:150 },
+  hunter  : { init:9,  max:25,  baseRepro:110, maxAge:4000, baseEnergy:65,  maxEnergy:200 },
+  grower  : { init:6,  max:16,  baseRepro:145, maxAge:5000, baseEnergy:80,  maxEnergy:240 },
+  plant   : { init:18, max:35,  baseRepro:70,  maxAge:4500, baseEnergy:10,  maxEnergy:120 },
+  parasite: { init:8,  max:22,  baseRepro:60,  maxAge:2200, baseEnergy:30,  maxEnergy:90  },
   orb     : { max:50,  rate:0.038 },
   rare    : { max:4,   chance:0.00022 },
 };
@@ -227,9 +227,10 @@ class Organism {
     this.vision           = traits.vision;
     this.reproductionRate = traits.reproductionRate;
     // state
-    this.energy   = energy ?? 50;
-    this.age      = 0;
-    this.maxAge   = CFG[type]?.maxAge ?? 3000;
+    this.energy    = energy ?? 50;
+    this.maxEnergy = CFG[type]?.maxEnergy ?? 200;
+    this.age       = 0;
+    this.maxAge    = CFG[type]?.maxAge ?? 3000;
     this.alive    = true;
     this.deathBy  = null;
     // physics
@@ -250,6 +251,7 @@ class Organism {
     this.trail.push({x:this.x, y:this.y});
     if (this.trail.length > this.trailMax) this.trail.shift();
 
+    if (this.energy > this.maxEnergy) this.energy = this.maxEnergy;
     this.age++;
 
     // Zone effects
@@ -488,7 +490,11 @@ class Glider extends Organism {
         this.energy+=o.energy; o.alive=false;
       }
       if (o.type==='plant'&&o.energy>5&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size*0.7)**2) {
-        this.energy+=o.energy*0.6; o.energy*=0.3;
+        this.energy+=o.energy*0.75;           // plant gives energy to glider
+        o.alive=false; deaths++;              // plant is fully consumed
+        const nPlt=entities.filter(e=>e.type==='plant').length;
+        if (nPlt<CFG.plant.max)              // respawn plant at random location
+          pendingSpawns.push(new Plant(rand(20,W-20),rand(20,H-20)));
       }
     }
 
@@ -655,13 +661,30 @@ class Grower extends Organism {
 
     this.limitSpeed(this.speed); this.step(); this.blobPhase+=this.blobSpd;
 
+    // Growers slowly seed new plants nearby (costs energy)
+    if (this.energy>60 && Math.random()<0.0014) {
+      const nPlt=entities.filter(e=>e.type==='plant').length+pendingSpawns.filter(e=>e.type==='plant').length;
+      if (nPlt<CFG.plant.max) {
+        this.energy-=10;
+        pendingSpawns.push(new Plant(
+          clamp(this.x+rand(-150,150),20,W-20),
+          clamp(this.y+rand(-150,150),20,H-20)
+        ));
+      }
+    }
+
     for (const o of all) {
       if (!o.alive) continue;
       if (o.type==='orb'&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
         this.energy+=o.energy*1.6; this.size=Math.min(this.size+0.5,40); o.alive=false;
       }
       if (o.type==='plant'&&o.energy>6&&dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
-        this.energy+=o.energy*1.0; this.size=Math.min(this.size+0.2,40); o.energy*=0.1;
+        this.energy+=o.energy;                // grower absorbs all plant energy
+        this.size=Math.min(this.size+0.2,40);
+        o.alive=false; deaths++;              // plant is fully consumed
+        const nPlt=entities.filter(e=>e.type==='plant').length;
+        if (nPlt<CFG.plant.max)              // respawn plant at random location
+          pendingSpawns.push(new Plant(rand(20,W-20),rand(20,H-20)));
       }
       if (o.type==='glider'&&this.size>o.size*2.8&&dist2(this.x,this.y,o.x,o.y)<(this.size*0.85)**2) {
         this.energy+=o.energy*0.8; this.size=Math.min(this.size+0.15,40);
@@ -746,6 +769,14 @@ class Parasite extends Organism {
       else this.wander(0.28);
 
       this.limitSpeed(this.speed); this.step();
+
+      // Absorb orbs while roaming — orbs give energy to any creature
+      for (const o of all) {
+        if (!o.alive||o.type!=='orb') continue;
+        if (dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
+          this.energy+=o.energy; o.alive=false;
+        }
+      }
 
       // Attach on contact
       if (target && dist2(this.x,this.y,target.x,target.y)<(this.size+target.size*0.7)**2) {
@@ -876,6 +907,8 @@ class Rare extends Organism {
 //  WORLD
 // ═══════════════════════════════════════════════════════
 let entities=[];
+// Mid-frame spawns (plant respawns, grower seeds) collected here each tick
+let pendingSpawns=[];
 
 function populate() {
   entities=[];
@@ -930,7 +963,8 @@ function update() {
     const child=e.update(entities);
     if (child) offspring.push(child);
   }
-  entities.push(...offspring);
+  entities.push(...offspring, ...pendingSpawns);
+  pendingSpawns=[];
   entities=entities.filter(e=>e.alive);
 
   frame++;

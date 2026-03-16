@@ -175,10 +175,10 @@ const CFG = {
   hunter: {
     init:9, max:25, baseEnergy:65, maxEnergy:200,
     maxAge:3500,
-    drain:1.65,           // hunters burn ~65% more energy — predators pay more
-    baseRepro:110,
+    drain:1.9,            // hunters burn ~90% more energy — scarcity pressure
+    baseRepro:140,        // higher threshold before breeding
     minReproAge:320,      // hunters mature more slowly
-    reproEnergyCost:0.55,
+    reproEnergyCost:0.65, // steeper cost per offspring
     reproCooldown:500,    // ~8 s — hunters reproduce slowly
     extThreshold:2,
   },
@@ -668,7 +668,7 @@ class Hunter extends Organism {
       if (o.type==='grower'&&o.size>=this.size*0.75) continue;
       if (inSafeZone(o.x,o.y)) continue;
       if (dist2(this.x,this.y,o.x,o.y)<(this.size+o.size*0.75)**2) {
-        this.energy+=o.size*3.5+12;
+        this.energy+=o.size*2.2+8;   // ~25-30 energy per kill, down from ~40+
         this.size=Math.min(this.size+0.1,23);
         this.hunger=0;
         o.alive=false; o.deathBy='eaten'; deaths++; deathsBy.predation++;

@@ -231,8 +231,9 @@ class Organism {
     this.maxEnergy = CFG[type]?.maxEnergy ?? 200;
     this.age       = 0;
     this.maxAge    = CFG[type]?.maxAge ?? 3000;
-    this.alive    = true;
-    this.deathBy  = null;
+    this.alive        = true;
+    this.deathBy      = null;
+    this.parasiteLoad = 0;   // how many parasites are currently attached
     // physics
     this.vx = rand(-1,1)*this.speed;
     this.vy = rand(-1,1)*this.speed;
@@ -754,58 +755,114 @@ class Parasite extends Organism {
     return best;
   }
 
+  // Helper: cleanly break attachment and give this parasite free velocity
+  _detach(host) {
+    if (host) host.parasiteLoad = Math.max(0, host.parasiteLoad - 1);
+    this.hostId      = null;
+    this.attachTimer = 0;
+    this.vx = rand(-1,1)*this.speed;
+    this.vy = rand(-1,1)*this.speed;
+  }
+
   update(all) {
-    this.pulse+=0.12;
+    this.pulse += 0.12;
 
-    // Find host reference
-    let host = this.hostId != null ? all.find(o=>o.id===this.hostId&&o.alive) : null;
+    // Resolve current host
+    let host = this.hostId != null ? all.find(o=>o.id===this.hostId && o.alive) : null;
 
-    if (host && inSafeZone(host.x, host.y)) { host=null; this.hostId=null; }
+    // Force-detach if host reached safe zone
+    if (host && inSafeZone(host.x, host.y)) { this._detach(host); host = null; }
 
+    // ── SEARCHING ───────────────────────────────────────────
     if (!host) {
-      this.hostId=null;
-      const target=this.findHost(all);
-      if (target) this.seek(target.x,target.y,0.20);
-      else this.wander(0.28);
+      const target = this.findHost(all);
+      if (target) this.seek(target.x, target.y, 0.22);
+      else        this.wander(0.30);
 
-      this.limitSpeed(this.speed); this.step();
+      this.limitSpeed(this.speed);
+      this.step();
 
-      // Absorb orbs while roaming — orbs give energy to any creature
+      // Extra drain while homeless — parasites die faster without a host
+      if (!target) this.energy -= 0.06;
+
+      // Absorb orbs while roaming
       for (const o of all) {
-        if (!o.alive||o.type!=='orb') continue;
-        if (dist2(this.x,this.y,o.x,o.y)<(this.size+o.size)**2) {
-          this.energy+=o.energy; o.alive=false;
+        if (!o.alive || o.type !== 'orb') continue;
+        if (dist2(this.x,this.y,o.x,o.y) < (this.size+o.size)**2) {
+          this.energy += o.energy; o.alive = false;
         }
       }
 
-      // Attach on contact
-      if (target && dist2(this.x,this.y,target.x,target.y)<(this.size+target.size*0.7)**2) {
-        this.hostId=target.id;
+      // Attach on collision
+      if (target && dist2(this.x,this.y,target.x,target.y) < (this.size+target.size*0.7)**2) {
+        this.hostId      = target.id;
+        this.attachTimer = 0;
+        target.parasiteLoad++;
       }
+
+    // ── ATTACHED ────────────────────────────────────────────
     } else {
-      // Attached: ride host, drain energy
-      this.x = host.x + Math.cos(this.attachTimer*0.05)*( host.size*0.7);
-      this.y = host.y + Math.sin(this.attachTimer*0.05)*( host.size*0.7);
+      // Ride host — orbit its surface
+      this.x = host.x + Math.cos(this.attachTimer*0.045) * (host.size*0.8);
+      this.y = host.y + Math.sin(this.attachTimer*0.045) * (host.size*0.8);
       this.attachTimer++;
-      this.vx=0; this.vy=0;
+      this.vx = 0; this.vy = 0;
       this.age++;
 
-      const drain=0.18+this.size*0.02;
-      host.energy-=drain;
-      this.energy+=drain*0.7;
+      // Drain host; gain a fraction of what's taken
+      const drain = 0.14 + this.size*0.014;
+      host.energy  -= drain;
+      this.energy  += drain * 0.6;
 
-      if (host.energy<3) { host.alive=false; host.deathBy='parasite'; deaths++; this.hostId=null; }
+      // Host dies from infection
+      if (host.energy <= 0) {
+        host.alive = false; host.deathBy = 'parasite'; deaths++;
+        this._detach(host); host = null;
+      }
 
-      // Detach sometimes randomly
-      if (Math.random()<0.001) { this.hostId=null; this.vx=rand(-1,1)*this.speed; this.vy=rand(-1,1)*this.speed; }
+      if (host) {
+        // ── INFECTION SPREAD ──────────────────────────────
+        // When the infected host brushes another creature, spawn a child
+        // parasite already latched onto that creature.
+        if (Math.random() < 0.005) {
+          const parCount = all.filter(o=>o.type==='parasite').length
+                         + pendingSpawns.filter(e=>e.type==='parasite').length;
+          if (parCount < CFG.parasite.max) {
+            for (const o of all) {
+              if (!o.alive || o === this || o.id === this.hostId) continue;
+              if (!['glider','grower','hunter'].includes(o.type)) continue;
+              if (inSafeZone(o.x, o.y)) continue;
+              if (dist2(host.x,host.y,o.x,o.y) < (host.size + o.size)**2) {
+                const ct = mutateTraits({speed:this.speed, size:Math.max(1.5,this.size*0.7),
+                                         vision:this.vision, reproductionRate:this.reproductionRate});
+                const child   = new Parasite(o.x+rand(-4,4), o.y+rand(-4,4), ct, this.energy*0.22);
+                child.hostId      = o.id;
+                child.attachTimer = 0;
+                o.parasiteLoad++;
+                pendingSpawns.push(child);
+                this.energy *= 0.78;   // spreading costs the parent energy
+                births++;
+                break;                 // one new infection per check
+              }
+            }
+          }
+        }
 
-      if (this.energy<=0) { this.alive=false; this.deathBy='starvation'; deaths++; return null; }
-      if (this.age>=this.maxAge) { this.alive=false; this.deathBy='old age'; deaths++; return null; }
+        // ── SPONTANEOUS DETACH ────────────────────────────
+        // Small random chance each tick, plus forced detach after ~10-16 s
+        if (Math.random() < 0.004 || this.attachTimer > 600 + rand(0,350)) {
+          this._detach(host); host = null;
+        }
+      }
+
+      if (this.energy <= 0) { this.alive=false; this.deathBy='starvation'; deaths++; return null; }
+      if (this.age >= this.maxAge) { this.alive=false; this.deathBy='old age'; deaths++; return null; }
     }
 
-    const count=all.filter(o=>o.type==='parasite').length;
-    if (this.energy>this.reproThreshold()&&count<CFG.parasite.max) {
-      this.energy*=0.52; births++; generation++;
+    // Reproduce via standard energy threshold
+    const count = all.filter(o=>o.type==='parasite').length;
+    if (this.energy > this.reproThreshold() && count < CFG.parasite.max) {
+      this.energy *= 0.52; births++; generation++;
       return new Parasite(
         this.x+rand(-15,15), this.y+rand(-15,15),
         mutateTraits({speed:this.speed,size:this.size,vision:this.vision,reproductionRate:this.reproductionRate}),
@@ -816,30 +873,47 @@ class Parasite extends Organism {
   }
 
   draw() {
-    const p=1+0.25*Math.sin(this.pulse);
-    const r=this.size*p;
+    const attached = this.hostId != null;
+    const p = 1 + (attached ? 0.28 : 0.14) * Math.sin(this.pulse);
+    const r = this.size * p;
+
     ctx.save();
-    ctx.shadowBlur=10; ctx.shadowColor='#ff44bb';
-    // Tentacle lines when attached
-    if (this.hostId!=null) {
-      ctx.strokeStyle='rgba(255,68,187,0.4)';
-      ctx.lineWidth=0.8;
-      for (let i=0;i<4;i++) {
-        const a=(this.attachTimer*0.05+i*(Math.PI/2));
+
+    if (attached) {
+      // ── ATTACHED: bright core + 5 wavy feeding filaments ──
+      ctx.shadowBlur = 16; ctx.shadowColor = '#ff44bb';
+      ctx.strokeStyle = 'rgba(255,68,187,0.5)';
+      ctx.lineWidth   = 0.9;
+      for (let i = 0; i < 5; i++) {
+        const a   = this.attachTimer*0.042 + i*(Math.PI*2/5);
+        const len = r * (2.0 + 0.5*Math.sin(this.pulse + i*1.3));
+        const cx  = this.x + Math.cos(a+0.5)*len*0.5;
+        const cy  = this.y + Math.sin(a+0.5)*len*0.5;
         ctx.beginPath();
-        ctx.moveTo(this.x,this.y);
-        ctx.lineTo(this.x+Math.cos(a)*r*2.5, this.y+Math.sin(a)*r*2.5);
+        ctx.moveTo(this.x, this.y);
+        ctx.quadraticCurveTo(cx, cy, this.x+Math.cos(a)*len, this.y+Math.sin(a)*len);
         ctx.stroke();
       }
+    } else {
+      // ── SEARCHING: dim, faint scan-ring showing awareness radius ──
+      ctx.shadowBlur  = 5; ctx.shadowColor = '#aa1166';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.vision*0.22, 0, Math.PI*2);
+      ctx.strokeStyle = 'rgba(255,68,187,0.05)';
+      ctx.lineWidth   = 0.7;
+      ctx.stroke();
     }
-    const g=ctx.createRadialGradient(this.x,this.y,0,this.x,this.y,r);
-    g.addColorStop(0,'#ffaadd');
-    g.addColorStop(0.5,'#ff44bb');
-    g.addColorStop(1,'rgba(180,0,100,0.5)');
-    ctx.beginPath(); ctx.arc(this.x,this.y,r,0,Math.PI*2);
-    ctx.fillStyle=g; ctx.globalAlpha=0.85; ctx.fill();
+
+    const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, r);
+    g.addColorStop(0,   attached ? '#ffffff' : '#ffbbee');
+    g.addColorStop(0.4, '#ff44bb');
+    g.addColorStop(1,   'rgba(140,0,80,0.45)');
+    ctx.beginPath(); ctx.arc(this.x, this.y, r, 0, Math.PI*2);
+    ctx.fillStyle   = g;
+    ctx.globalAlpha = attached ? 0.95 : 0.60;
+    ctx.fill();
     ctx.restore();
-    this.drawBar(this.reproThreshold(),'#ff44bb');
+    this.drawBar(this.reproThreshold(), '#ff44bb');
   }
 }
 
@@ -1024,6 +1098,21 @@ function render() {
   for (const e of layers.hunter)   e.draw();
   for (const e of layers.parasite) e.draw();
   for (const e of layers.rare)     e.draw();
+
+  // Infection aura — pulsing pink ring around every infected host
+  const infPulse = 0.25 + 0.12*Math.sin(frame*0.16);
+  for (const e of entities) {
+    if (e.parasiteLoad <= 0) continue;
+    ctx.save();
+    ctx.globalAlpha = infPulse * Math.min(1, e.parasiteLoad*0.7 + 0.3);
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, e.size*(1.55 + 0.1*Math.sin(frame*0.22)), 0, Math.PI*2);
+    ctx.strokeStyle = '#ff44bb';
+    ctx.lineWidth   = 1.4 + e.parasiteLoad*0.4;
+    ctx.shadowBlur  = 10; ctx.shadowColor = '#ff44bb';
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (frame%10===0) {
     document.getElementById('p-gli').textContent = layers.glider.length;
